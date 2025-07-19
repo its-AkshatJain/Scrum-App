@@ -48,7 +48,7 @@ const VideoChat = () => {
             <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-2xl">
               <Video className="w-10 h-10 text-white" />
             </div>
-            <h1 className="text-4xl font-bold text-white mb-2">Video Meet</h1>
+            <h1 className="text-4xl font-bold text-white mb-2">Scrum</h1>
             <p className="text-gray-400">Connect with anyone, anywhere</p>
           </div>
 
