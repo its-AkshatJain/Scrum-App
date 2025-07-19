@@ -8,8 +8,12 @@ export const useWebRTC = () => {
   const [roomId, setRoomId] = useState(() => localStorage.getItem("roomId") || "");
   const [inRoom, setInRoom] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState("idle");
-  const [isMuted, setIsMuted] = useState(false);
-  const [videoOff, setVideoOff] = useState(false);
+  const [isMuted, setIsMuted] = useState(() =>
+    JSON.parse(localStorage.getItem("isMuted") || "false")
+  );
+  const [videoOff, setVideoOff] = useState(() =>
+    JSON.parse(localStorage.getItem("videoOff") || "false")
+  );
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
   const [loading, setLoading] = useState({});
@@ -17,29 +21,30 @@ export const useWebRTC = () => {
   const [participantCount, setParticipantCount] = useState(1);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
 
-
   const peerConnection = useRef(null);
-  const screenStreamRef = useRef(null); // For optional screen sharing
+  const screenStreamRef = useRef(null);
 
   const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
+  // Update mic/camera state persistence
   useEffect(() => {
-  socket.on("participant-count", (count) => {
-    setParticipantCount(count);
-  });
+    localStorage.setItem("isMuted", JSON.stringify(isMuted));
+    localStorage.setItem("videoOff", JSON.stringify(videoOff));
+  }, [isMuted, videoOff]);
 
-  return () => {
-    socket.off("participant-count");
-  };
-}, []);
-
+  useEffect(() => {
+    socket.on("participant-count", (count) => {
+      setParticipantCount(count);
+    });
+    return () => socket.off("participant-count");
+  }, []);
 
   const showToast = (message, type = "info") => {
     setToast({ message, type, id: Date.now() });
   };
 
   const setLoadingState = (key, value) => {
-    setLoading(prev => ({ ...prev, [key]: value }));
+    setLoading((prev) => ({ ...prev, [key]: value }));
   };
 
   const cleanup = () => {
@@ -50,17 +55,14 @@ export const useWebRTC = () => {
     }
     peerConnection.current = null;
 
-    // Stop all active tracks (camera, mic, screen share)
-    localStream?.getTracks().forEach(track => track.stop());
-    remoteStream?.getTracks().forEach(track => track.stop());
-    screenStreamRef.current?.getTracks().forEach(track => track.stop());
+    localStream?.getTracks().forEach((track) => track.stop());
+    remoteStream?.getTracks().forEach((track) => track.stop());
+    screenStreamRef.current?.getTracks().forEach((track) => track.stop());
 
     setLocalStream(null);
     setRemoteStream(null);
     screenStreamRef.current = null;
 
-    setIsMuted(false);
-    setVideoOff(false);
     setParticipantCount(1);
   };
 
@@ -77,7 +79,7 @@ export const useWebRTC = () => {
       }
     };
 
-    stream.getTracks().forEach(track => {
+    stream.getTracks().forEach((track) => {
       peerConnection.current.addTrack(track, stream);
     });
   };
@@ -89,13 +91,24 @@ export const useWebRTC = () => {
         video: { width: 1280, height: 720 },
         audio: { echoCancellation: true, noiseSuppression: true },
       });
+
+      // Apply mute/video states after getting stream
+      if (isMuted) {
+        const audioTrack = stream.getAudioTracks()[0];
+        if (audioTrack) audioTrack.enabled = false;
+      }
+      if (videoOff) {
+        const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack) videoTrack.enabled = false;
+      }
+
       setLocalStream(stream);
       return stream;
     } catch (err) {
       console.error("Media error:", err);
-      if (err.name === 'NotAllowedError') {
+      if (err.name === "NotAllowedError") {
         showToast("Camera/microphone access denied", "error");
-      } else if (err.name === 'NotFoundError') {
+      } else if (err.name === "NotFoundError") {
         showToast("No camera/microphone found", "error");
       } else {
         showToast("Error accessing media devices", "error");
@@ -119,7 +132,6 @@ export const useWebRTC = () => {
       showToast("Please enter a room ID", "error");
       return;
     }
-
     try {
       setLoadingState("join", true);
       setConnectionStatus("connecting");
@@ -152,13 +164,13 @@ export const useWebRTC = () => {
   };
 
   const toggleMute = () => {
-  const audioTrack = localStream?.getAudioTracks()[0];
-  if (audioTrack) {
-    audioTrack.enabled = !audioTrack.enabled;
-    setIsMuted(!audioTrack.enabled); // This is correct
-    showToast(audioTrack.enabled ? "Microphone unmuted" : "Microphone muted", "info");
-  }
-};
+    const audioTrack = localStream?.getAudioTracks()[0];
+    if (audioTrack) {
+      audioTrack.enabled = !audioTrack.enabled;
+      setIsMuted(!audioTrack.enabled);
+      showToast(audioTrack.enabled ? "Microphone unmuted" : "Microphone muted", "info");
+    }
+  };
 
   const toggleVideo = () => {
     const videoTrack = localStream?.getVideoTracks()[0];
@@ -170,48 +182,45 @@ export const useWebRTC = () => {
   };
 
   const shareScreen = async () => {
-  try {
-    if (screenStreamRef.current) {
-      // Stop sharing
-      screenStreamRef.current.getTracks().forEach(track => track.stop());
-      screenStreamRef.current = null;
+    try {
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach((track) => track.stop());
+        screenStreamRef.current = null;
 
-      // Restore camera video track
-      const camTrack = localStream?.getVideoTracks()[0];
+        const camTrack = localStream?.getVideoTracks()[0];
+        const sender = peerConnection.current
+          ?.getSenders()
+          .find((s) => s.track && s.track.kind === "video");
+        if (camTrack && sender) sender.replaceTrack(camTrack);
+
+        setIsScreenSharing(false);
+        showToast("Screen sharing stopped", "info");
+        return;
+      }
+
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      screenStreamRef.current = screenStream;
+
       const sender = peerConnection.current
         ?.getSenders()
-        .find(s => s.track && s.track.kind === "video");
-      if (camTrack && sender) sender.replaceTrack(camTrack);
+        .find((s) => s.track && s.track.kind === "video");
+      if (sender) sender.replaceTrack(screenStream.getTracks()[0]);
 
-      setIsScreenSharing(false);
-      showToast("Screen sharing stopped", "info");
-      return;
+      screenStream.getTracks()[0].onended = () => {
+        const camTrack = localStream?.getVideoTracks()[0];
+        if (camTrack && sender) sender.replaceTrack(camTrack);
+        screenStreamRef.current = null;
+        setIsScreenSharing(false);
+        showToast("Screen sharing stopped", "info");
+      };
+
+      setIsScreenSharing(true);
+      showToast("Screen sharing started", "success");
+    } catch (err) {
+      console.error("Screen share error:", err);
+      showToast("Unable to share screen", "error");
     }
-
-    const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-    screenStreamRef.current = screenStream;
-
-    const sender = peerConnection.current
-      ?.getSenders()
-      .find(s => s.track && s.track.kind === "video");
-    if (sender) sender.replaceTrack(screenStream.getTracks()[0]);
-
-    // When user stops screen sharing
-    screenStream.getTracks()[0].onended = () => {
-      const camTrack = localStream?.getVideoTracks()[0];
-      if (camTrack && sender) sender.replaceTrack(camTrack);
-      screenStreamRef.current = null;
-      setIsScreenSharing(false);
-      showToast("Screen sharing stopped", "info");
-    };
-
-    setIsScreenSharing(true);
-    showToast("Screen sharing started", "success");
-  } catch (err) {
-    console.error("Screen share error:", err);
-    showToast("Unable to share screen", "error");
-  }
-};
+  };
 
   // WebRTC signaling
   useEffect(() => {
@@ -262,12 +271,22 @@ export const useWebRTC = () => {
     };
   }, [roomId]);
 
-  // Cleanup when tab is closed or refreshed
+  // Auto-rejoin room if user refreshes
   useEffect(() => {
-    const handleUnload = () => leaveRoom();
+    if (roomId && !inRoom) {
+      joinRoom();
+    }
+  }, [roomId]);
+
+  // Prevent leaving the room completely on refresh (only cleanup tracks)
+  useEffect(() => {
+    const handleUnload = () => {
+      localStream?.getTracks().forEach((track) => track.stop());
+      screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+    };
     window.addEventListener("beforeunload", handleUnload);
     return () => window.removeEventListener("beforeunload", handleUnload);
-  }, []);
+  }, [localStream]);
 
   return {
     roomId,
