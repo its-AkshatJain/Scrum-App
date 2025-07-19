@@ -1,4 +1,5 @@
-import './App.css'
+import React from "react";
+import "./App.css";
 import VideoChat from "./components/VideoChat";
 
 function App() {

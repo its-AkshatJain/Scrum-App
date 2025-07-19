@@ -4,19 +4,43 @@ import io from "socket.io-client";
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:5000";
 const socket = io(SOCKET_URL);
 
-export function useWebRTC() {
+export const useWebRTC = () => {
   const [roomId, setRoomId] = useState(() => localStorage.getItem("roomId") || "");
   const [inRoom, setInRoom] = useState(false);
-  const [message, setMessage] = useState("");
+  const [connectionStatus, setConnectionStatus] = useState("idle");
   const [isMuted, setIsMuted] = useState(false);
   const [videoOff, setVideoOff] = useState(false);
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
+  const [loading, setLoading] = useState({});
+  const [toast, setToast] = useState(null);
+  const [participantCount, setParticipantCount] = useState(1);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+
 
   const peerConnection = useRef(null);
-  const screenStream = useRef(null);
+  const screenStreamRef = useRef(null); // For optional screen sharing
 
   const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
+  useEffect(() => {
+  socket.on("participant-count", (count) => {
+    setParticipantCount(count);
+  });
+
+  return () => {
+    socket.off("participant-count");
+  };
+}, []);
+
+
+  const showToast = (message, type = "info") => {
+    setToast({ message, type, id: Date.now() });
+  };
+
+  const setLoadingState = (key, value) => {
+    setLoading(prev => ({ ...prev, [key]: value }));
+  };
 
   const cleanup = () => {
     try {
@@ -24,10 +48,20 @@ export function useWebRTC() {
     } catch (err) {
       console.error("Error closing peer connection", err);
     }
-    localStream?.getTracks().forEach((t) => t.stop());
-    screenStream.current?.getTracks().forEach((t) => t.stop());
+    peerConnection.current = null;
+
+    // Stop all active tracks (camera, mic, screen share)
+    localStream?.getTracks().forEach(track => track.stop());
+    remoteStream?.getTracks().forEach(track => track.stop());
+    screenStreamRef.current?.getTracks().forEach(track => track.stop());
+
     setLocalStream(null);
     setRemoteStream(null);
+    screenStreamRef.current = null;
+
+    setIsMuted(false);
+    setVideoOff(false);
+    setParticipantCount(1);
   };
 
   const createPeerConnection = (stream) => {
@@ -43,20 +77,32 @@ export function useWebRTC() {
       }
     };
 
-    stream.getTracks().forEach((track) => {
+    stream.getTracks().forEach(track => {
       peerConnection.current.addTrack(track, stream);
     });
   };
 
   const startLocalStream = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      setLoadingState("video", true);
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 1280, height: 720 },
+        audio: { echoCancellation: true, noiseSuppression: true },
+      });
       setLocalStream(stream);
       return stream;
     } catch (err) {
-      setMessage("Error accessing camera/microphone.");
       console.error("Media error:", err);
+      if (err.name === 'NotAllowedError') {
+        showToast("Camera/microphone access denied", "error");
+      } else if (err.name === 'NotFoundError') {
+        showToast("No camera/microphone found", "error");
+      } else {
+        showToast("Error accessing media devices", "error");
+      }
       return null;
+    } finally {
+      setLoadingState("video", false);
     }
   };
 
@@ -64,25 +110,35 @@ export function useWebRTC() {
     socket.emit("create-room", (newRoomId) => {
       setRoomId(newRoomId);
       localStorage.setItem("roomId", newRoomId);
-      setMessage(`Room created! Share this ID: ${newRoomId}`);
+      showToast(`Room created! Share this ID: ${newRoomId}`, "success");
     });
   };
 
   const joinRoom = async () => {
-    if (!roomId) {
-      setMessage("Enter a room ID first.");
+    if (!roomId.trim()) {
+      showToast("Please enter a room ID", "error");
       return;
     }
 
-    const stream = await startLocalStream();
-    if (!stream) return;
+    try {
+      setLoadingState("join", true);
+      setConnectionStatus("connecting");
 
-    setInRoom(true);
-    setMessage("Joining room...");
-    localStorage.setItem("roomId", roomId);
+      const stream = await startLocalStream();
+      if (!stream) return;
 
-    createPeerConnection(stream);
-    socket.emit("join-room", roomId);
+      createPeerConnection(stream);
+      setInRoom(true);
+      localStorage.setItem("roomId", roomId);
+      socket.emit("join-room", roomId);
+      showToast("Joined the room", "success");
+    } catch (err) {
+      console.error("Join room error:", err);
+      showToast("Failed to join room", "error");
+      setConnectionStatus("disconnected");
+    } finally {
+      setLoadingState("join", false);
+    }
   };
 
   const leaveRoom = () => {
@@ -91,49 +147,75 @@ export function useWebRTC() {
     localStorage.removeItem("roomId");
     setRoomId("");
     setInRoom(false);
-    setMessage("You left the room.");
+    setConnectionStatus("idle");
+    showToast("You left the room", "info");
   };
 
   const toggleMute = () => {
-    const audioTrack = localStream?.getAudioTracks()[0];
-    if (audioTrack) {
-      audioTrack.enabled = !audioTrack.enabled;
-      setIsMuted(!audioTrack.enabled);
-    }
-  };
+  const audioTrack = localStream?.getAudioTracks()[0];
+  if (audioTrack) {
+    audioTrack.enabled = !audioTrack.enabled;
+    setIsMuted(!audioTrack.enabled); // This is correct
+    showToast(audioTrack.enabled ? "Microphone unmuted" : "Microphone muted", "info");
+  }
+};
 
   const toggleVideo = () => {
     const videoTrack = localStream?.getVideoTracks()[0];
     if (videoTrack) {
       videoTrack.enabled = !videoTrack.enabled;
       setVideoOff(!videoTrack.enabled);
+      showToast(videoTrack.enabled ? "Camera on" : "Camera off", "info");
     }
   };
 
   const shareScreen = async () => {
-    try {
-      screenStream.current = await navigator.mediaDevices.getDisplayMedia({ video: true });
-      const screenTrack = screenStream.current.getTracks()[0];
+  try {
+    if (screenStreamRef.current) {
+      // Stop sharing
+      screenStreamRef.current.getTracks().forEach(track => track.stop());
+      screenStreamRef.current = null;
+
+      // Restore camera video track
+      const camTrack = localStream?.getVideoTracks()[0];
       const sender = peerConnection.current
-        .getSenders()
-        .find((s) => s.track && s.track.kind === "video");
+        ?.getSenders()
+        .find(s => s.track && s.track.kind === "video");
+      if (camTrack && sender) sender.replaceTrack(camTrack);
 
-      if (sender) sender.replaceTrack(screenTrack);
-
-      screenTrack.onended = () => {
-        const camTrack = localStream?.getVideoTracks()[0];
-        if (camTrack && sender) sender.replaceTrack(camTrack);
-      };
-    } catch (err) {
-      setMessage("Error sharing screen.");
-      console.error("Screen share error:", err);
+      setIsScreenSharing(false);
+      showToast("Screen sharing stopped", "info");
+      return;
     }
-  };
 
-  // Handle socket events
+    const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+    screenStreamRef.current = screenStream;
+
+    const sender = peerConnection.current
+      ?.getSenders()
+      .find(s => s.track && s.track.kind === "video");
+    if (sender) sender.replaceTrack(screenStream.getTracks()[0]);
+
+    // When user stops screen sharing
+    screenStream.getTracks()[0].onended = () => {
+      const camTrack = localStream?.getVideoTracks()[0];
+      if (camTrack && sender) sender.replaceTrack(camTrack);
+      screenStreamRef.current = null;
+      setIsScreenSharing(false);
+      showToast("Screen sharing stopped", "info");
+    };
+
+    setIsScreenSharing(true);
+    showToast("Screen sharing started", "success");
+  } catch (err) {
+    console.error("Screen share error:", err);
+    showToast("Unable to share screen", "error");
+  }
+};
+
+  // WebRTC signaling
   useEffect(() => {
     socket.on("user-joined", () => {
-      setMessage("Another user joined! Connecting...");
       if (peerConnection.current) {
         peerConnection.current.createOffer().then((offer) => {
           peerConnection.current.setLocalDescription(offer);
@@ -143,29 +225,29 @@ export function useWebRTC() {
     });
 
     socket.on("user-left", () => {
-      setMessage("User left the room.");
       setRemoteStream(null);
+      setParticipantCount(1);
+      showToast("User left the room", "info");
     });
 
-    socket.on("offer", async (data) => {
-      setMessage("Received offer, sending answer...");
+    socket.on("offer", async ({ sdp }) => {
       if (!peerConnection.current) return;
-      await peerConnection.current.setRemoteDescription(new RTCSessionDescription(data.sdp));
+      await peerConnection.current.setRemoteDescription(new RTCSessionDescription(sdp));
       const answer = await peerConnection.current.createAnswer();
       await peerConnection.current.setLocalDescription(answer);
       socket.emit("answer", { roomId, sdp: answer });
     });
 
-    socket.on("answer", async (data) => {
-      setMessage("Connected!");
+    socket.on("answer", async ({ sdp }) => {
       if (peerConnection.current) {
-        await peerConnection.current.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        await peerConnection.current.setRemoteDescription(new RTCSessionDescription(sdp));
+        setConnectionStatus("connected");
       }
     });
 
-    socket.on("ice-candidate", async (data) => {
+    socket.on("ice-candidate", async ({ candidate }) => {
       try {
-        await peerConnection.current?.addIceCandidate(new RTCIceCandidate(data.candidate));
+        await peerConnection.current?.addIceCandidate(new RTCIceCandidate(candidate));
       } catch (err) {
         console.error("Error adding ICE candidate", err);
       }
@@ -180,32 +262,33 @@ export function useWebRTC() {
     };
   }, [roomId]);
 
-  // Cleanup on page unload
+  // Cleanup when tab is closed or refreshed
   useEffect(() => {
     const handleUnload = () => leaveRoom();
     window.addEventListener("beforeunload", handleUnload);
     return () => window.removeEventListener("beforeunload", handleUnload);
   }, []);
 
-  // Auto-rejoin if a room exists (refresh)
-  useEffect(() => {
-    if (roomId && !inRoom) joinRoom();
-  }, []);
-
   return {
     roomId,
     setRoomId,
     inRoom,
-    message,
+    connectionStatus,
     isMuted,
     videoOff,
     localStream,
     remoteStream,
+    loading,
+    toast,
+    participantCount,
+    shareScreen,
+    isScreenSharing,
     createRoom,
     joinRoom,
     leaveRoom,
     toggleMute,
     toggleVideo,
-    shareScreen,
+    showToast,
+    setToast,
   };
-}
+};

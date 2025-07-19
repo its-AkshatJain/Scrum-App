@@ -1,26 +1,54 @@
-// frontend/src/components/ControlsToolbar.js
-export default function ControlsToolbar({
+import React from "react";
+import { Mic, MicOff, Video, VideoOff, Monitor, PhoneOff } from "lucide-react";
+import ControlButton from "./ControlButton"; 
+
+const ControlsToolbar = ({
   isMuted,
   videoOff,
   onToggleMute,
   onToggleVideo,
   onShareScreen,
   onLeaveRoom,
-}) {
+  isScreenSharing = false,
+  loading = {}
+}) => {
   return (
-    <div className="flex gap-2 mt-4">
-      <button onClick={onToggleMute} className="p-2 bg-gray-700 text-white rounded">
-        {isMuted ? "Unmute" : "Mute"}
-      </button>
-      <button onClick={onToggleVideo} className="p-2 bg-gray-700 text-white rounded">
-        {videoOff ? "Start Video" : "Stop Video"}
-      </button>
-      <button onClick={onShareScreen} className="p-2 bg-purple-500 text-white rounded">
-        Share Screen
-      </button>
-      <button onClick={onLeaveRoom} className="p-2 bg-red-500 text-white rounded">
-        Leave Room
-      </button>
+    <div className="flex items-center gap-4 p-6 bg-gray-900/80 backdrop-blur-xl rounded-3xl border border-gray-700 shadow-2xl">
+      <ControlButton
+        icon={isMuted ? MicOff : Mic}
+        label={isMuted ? "Unmute" : "Mute"}
+        onClick={onToggleMute}
+        variant={isMuted ? "danger" : "default"}
+        loading={loading.audio}
+      />
+      
+      <ControlButton
+        icon={videoOff ? VideoOff : Video}
+        label={videoOff ? "Start Video" : "Stop Video"}
+        onClick={onToggleVideo}
+        variant={videoOff ? "danger" : "default"}
+        loading={loading.video}
+      />
+      
+      <ControlButton
+        icon={Monitor}
+        label={isScreenSharing ? "Stop Sharing" : "Share Screen"}
+        onClick={onShareScreen}
+        variant={isScreenSharing ? "success" : "secondary"}
+        loading={loading.screen}
+      />
+      
+      <div className="w-px h-12 bg-gray-600 mx-2" />
+      
+      <ControlButton
+        icon={PhoneOff}
+        label="Leave"
+        onClick={onLeaveRoom}
+        variant="danger"
+        loading={loading.leave}
+      />
     </div>
   );
-}
+};
+
+export default ControlsToolbar;
