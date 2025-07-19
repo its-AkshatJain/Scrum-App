@@ -1,0 +1,33 @@
+webrtc-app/
+│
+backend/
+├── server.js             # Single entry point (Express + Socket.IO)
+├── socket/
+│   ├── index.js          # Socket.IO setup
+│   ├── handlers.js       # Event handlers
+│   └── rooms.js          # Room management
+├── utils/
+│   └── generateRoomId.js # Utility for room IDs
+└── config/
+    └── cors.js           # CORS settings
+│   ├── package.json
+│   ├── .env.development
+│   └── .env.production
+│
+├── frontend/
+│   ├── dist/              # Build output (after npm run build)
+│   ├── src/
+frontend/src/components/
+│
+├── VideoPlayer.js
+├── ControlsToolbar.js
+├── InviteBox.js
+├── useWebRTC.js
+└── VideoChat.js
+│   ├── package.json
+│   ├── vite.config.js
+│   ├── .env.development
+│   └── .env.production
+│
+└── nginx/
+    └── webrtc.conf        # Nginx config (we’ll create this)
