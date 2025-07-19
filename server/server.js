@@ -8,6 +8,11 @@ import corsOptions from "./config/cors.js";
 const app = express();
 app.use(cors(corsOptions));
 
+// Health-check route
+app.get("/", (req, res) => {
+  res.send("Server is running!");
+});
+
 const server = createServer(app);
 
 // Initialize Socket.IO
